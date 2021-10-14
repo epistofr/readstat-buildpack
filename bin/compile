@@ -1,0 +1,85 @@
+#!/bin/bash
+
+set -e
+
+BUILDER_VERSION='v1'
+
+header() {
+  echo "" || true
+  echo "-----> $*" || true
+}
+
+output() {
+  while IFS= read -r LINE; do
+    # do not indent headers that are being piped through the output
+    if [[ "$LINE" =~ ^-----\>.* ]]; then
+      echo "$LINE" || true
+    else
+      echo "       $LINE" || true
+    fi
+  done
+}
+
+# Usage is ./compile BUILD_DIR CACHE_DIR ENV_DIR
+
+BUILD_DIR=$1
+CACHE_DIR=$2
+ENV_DIR=$3
+
+header "Check required ReadStat version"
+
+if [[ -z $READSTAT_VERSION ]]; then
+  READSTAT_VERSION="1.1.7"
+  echo "Variable READSTAT_VERSION isn't set, using default value: $READSTAT_VERSION" | output
+else
+  echo "Using version $READSTAT_VERSION" | output
+fi
+
+register_paths() {
+  header "registering paths"
+  PROFILE_PATH="$BUILD_DIR/.profile.d/"
+  mkdir -p "$PROFILE_PATH"
+  echo 'export PATH="$PATH:$HOME/vendor/readstat/bin"' >"$PROFILE_PATH/readstat.sh"
+  echo 'export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$HOME/vendor/readstat/lib"' >>"$PROFILE_PATH/readstat.sh"
+}
+
+install_dir="$BUILD_DIR/vendor/readstat"
+cache_version="$CACHE_DIR/$BUILDER_VERSION/$READSTAT_VERSION"
+
+header "Check if we have a successful build in the cache"
+if [ -f $cache_version/.success ]; then
+  echo "We do, install it"
+  cd $cache_version
+  ./configure --prefix="$install_dir"
+  make install
+
+  register_paths
+  exit 0
+fi
+
+header "Fetch the source"
+rm -rf $cache_version
+mkdir -p $cache_version/
+
+output_file="$cache_version/source.tar.gz"
+
+URL="https://github.com/WizardMac/ReadStat/releases/download/v$READSTAT_VERSION/readstat-$READSTAT_VERSION.tar.gz"
+
+code=$(curl "$URL" -L --silent --fail --retry 5 --retry-max-time 15 -o $output_file --write-out "%{http_code}")
+
+if [ "$code" != "200" ]; then
+  echo "Unable to download readstat: $code" | output
+  exit 1
+fi
+
+header "Unpacking the archive"
+tar xf $output_file -C $cache_version --strip-components=1
+
+cd $cache_version
+header "Configure and install"
+./configure --prefix="$install_dir"
+make
+make install
+
+register_paths
+touch ".success"
